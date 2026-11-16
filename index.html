@@ -879,11 +879,14 @@ function profileSheet(){
     <div class="chips">${SWATCHES.map(c=>`<button class="swatch" style="background:${c}" data-act="swatch" data-c="${c}" aria-label="Farbe ${c}"></button>`).join("")}</div>
     <div class="looks">${LOOKS.map(([k,l])=>`<label class="lookrow"><span>${l}</span><input type="color" name="look-${k}" value="${S.look[k]||cssVar(k)}"></label>`).join("")}</div>
     <button class="btn" data-act="lookReset">Standardfarben</button></div>
-   <div class="sheet-sec"><h4>iPhone-Widget</h4>
+   <div class="sheet-sec"><h4>iPhone-Widget und Mitteilungen</h4>
     ${inFrame?`<p class="small muted">Der Widget-Sync funktioniert in der installierten App (über GitHub Pages), nicht in dieser Vorschau.</p>`:
     S.sync&&S.sync.gistId?`<p class="small">Verbunden. Zuletzt aktualisiert: ${S.sync.last?new Date(S.sync.last).toLocaleString("de-DE"):"–"}${S.sync.err?` <span class="danger">(Fehler ${esc(S.sync.err)})</span>`:""}</p>
       <p class="small muted">Diese Adresse in Scriptable als Widget-Parameter eintragen:</p><textarea id="wUrl" readonly style="min-height:64px;font-size:13px">${esc(widgetUrl())}</textarea>
       <div class="btn-row"><button class="btn" data-act="copyWUrl">Adresse kopieren</button><button class="btn" data-act="syncNow">Jetzt aktualisieren</button></div>
+      <h4 style="margin-top:14px">Mitteilungen (iPhone-Kalender)</h4>
+      <p class="small muted">Einmal abonnieren: Dann erinnert dich der iPhone-Kalender an Training, Essen, Wecker und Phasenwechsel, auch wenn die App zu ist. Beim Abonnieren „Hinweise entfernen“ ausschalten.</p>
+      <div class="btn-row"><a class="btn" href="${esc(calUrl())}">Kalender abonnieren</a><button class="btn" data-act="copyCUrl">Adresse kopieren</button></div>
       <button class="btn danger" data-act="syncOff" data-confirm>Trennen</button>`:
     `<p class="small muted">Für Widgets auf dem Homescreen: GitHub-Token mit dem Recht „gist“ einfügen. Die Daten landen in einem geheimen Gist, das nur über die Adresse lesbar ist.</p>
       <input id="syncToken" type="password" autocomplete="off" placeholder="ghp_… oder github_pat_…"><button class="btn" data-act="syncOn">Verbinden</button>`}</div>
@@ -983,6 +986,8 @@ function widgetSummary(){
   const next=upcoming(21).find(x=>x.type==="gym"&&!x.done);
   return {v:1,updated:new Date().toISOString(),date:t,name:S.profile.name,
     kcal:Math.round(e.kcal),kcalTarget:Math.round(tg.kcal),protein:Math.round(e.P),proteinTarget:Math.round(tg.P),
+    carbs:Math.round(e.C),carbsTarget:Math.round(tg.C),fat:Math.round(e.F),fatTarget:Math.round(tg.F),trainingDay:!!tg.train,
+    phase:(()=>{const ph=tg.phase,nx=nextPhase(t);if(!ph)return null;return {name:ph.name,daysLeft:ph.to?Math.round((parseIso(ph.to)-parseIso(t))/864e5)+1:null,next:nx?nx.name:null,nextFrom:nx?nx.from:null}})(),
     water:(S.water||{})[t]||0,waterGoal:Math.round(S.profile.weight*0.035/0.25),
     alarm:na?{time:pad(na.at.getHours())+":"+pad(na.at.getMinutes()),day:relDate(iso(na.at)),label:na.a.label}:null,
     training:next?{name:planById(next.plan)?.name||"Training",day:relDate(next.date),time:next.time}:null,
@@ -990,11 +995,30 @@ function widgetSummary(){
     shopping:S.shopping.filter(x=>!x.done).map(x=>x.n).slice(0,8),shoppingOpen:S.shopping.filter(x=>!x.done).length,
     appUrl:location.href.split("#")[0]};
 }
+/* Kalender-Abo: echte iOS-Mitteilungen auch bei geschlossener App (iPhone-Kalender liest das Gist) */
+function icsFeed(){
+  const tx=s=>String(s).replace(/\\/g,"\\\\").replace(/[,;]/g,m=>"\\"+m).replace(/\r?\n/g,"\\n");
+  const stamp=new Date().toISOString().replace(/[-:]/g,"").slice(0,15)+"Z",dt=(d,t)=>d.replace(/-/g,"")+"T"+t.replace(":","")+"00";
+  const end=(d,t,min)=>{const [h,m]=t.split(":").map(Number);const x=new Date(parseIso(d));x.setHours(h,m+min);return iso(x).replace(/-/g,"")+"T"+pad(x.getHours())+pad(x.getMinutes())+"00"};
+  const al=(trig,txt)=>["BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:"+tx(txt),"TRIGGER:"+trig,"END:VALARM"];
+  const L=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Lifeplanner//DE","CALSCALE:GREGORIAN","METHOD:PUBLISH","X-WR-CALNAME:Lifeplanner","REFRESH-INTERVAL;VALUE=DURATION:PT1H","X-PUBLISHED-TTL:PT1H"];
+  for(const e of upcoming(60)){if(!e.time||e.done)continue;const title=evTitle(e);
+    L.push("BEGIN:VEVENT","UID:"+String(e.id).replace(/[^\w@.-]/g,"")+"@lifeplanner","DTSTAMP:"+stamp,"DTSTART:"+dt(e.date,e.time),"DTEND:"+end(e.date,e.time,e.type==="gym"?75:e.type==="termin"?60:30),"SUMMARY:"+tx(title),
+      ...(e.reminder>0?al("-PT"+e.reminder+"M",title):e.ph||e.type==="essen"||e.type==="aufgabe"?al("PT0M",title):[]),"END:VEVENT")}
+  const BD=["SU","MO","TU","WE","TH","FR","SA"],t=todayIso();
+  for(const a of S.alarms){if(!a.on||!a.days.length)continue;
+    L.push("BEGIN:VEVENT","UID:alarm-"+a.id+"@lifeplanner","DTSTAMP:"+stamp,"DTSTART:"+dt(t,a.time),"DTEND:"+end(t,a.time,5),"RRULE:FREQ=WEEKLY;BYDAY="+a.days.map(d=>BD[d]).join(","),"SUMMARY:"+tx("⏰ "+(a.label||"Wecker")),...al("PT0M",a.label||"Wecker"),"END:VEVENT")}
+  for(const ph of S.phases||[]){if(ph.from<=t)continue;const d=ph.from.replace(/-/g,""),nd=iso(addDays(parseIso(ph.from),1)).replace(/-/g,"");
+    L.push("BEGIN:VEVENT","UID:phase-"+ph.id+"@lifeplanner","DTSTAMP:"+stamp,"DTSTART;VALUE=DATE:"+d,"DTEND;VALUE=DATE:"+nd,"SUMMARY:"+tx("Neue Phase: "+ph.name),"DESCRIPTION:"+tx("Lifeplanner stellt Kalorien und Makros heute automatisch um."),
+      ...al("-P6DT15H","In einer Woche startet: "+ph.name),...al("PT9H","Ab heute: "+ph.name),"END:VEVENT")}
+  L.push("END:VCALENDAR");
+  return L.map(l=>{let o="",u=l;while(u.length>73){o+=u.slice(0,73)+"\r\n ";u=u.slice(73)}return o+u}).join("\r\n");
+}
 let syncT=null;
 function queueSync(){if(!S.sync||!S.sync.token||inFrame)return;clearTimeout(syncT);syncT=setTimeout(pushSync,3000)}
 async function pushSync(manual){
   const sy=S.sync;if(!sy||!sy.token)return false;
-  const body={description:"Lifeplanner Widget-Daten",files:{"lifeplanner-widget.json":{content:JSON.stringify(widgetSummary())}}};
+  const body={description:"Lifeplanner Widget-Daten",files:{"lifeplanner-widget.json":{content:JSON.stringify(widgetSummary())},"lifeplanner.ics":{content:icsFeed()}}};
   try{
     const r=await fetch("https://api.github.com/gists"+(sy.gistId?"/"+sy.gistId:""),{method:sy.gistId?"PATCH":"POST",
       headers:{"Authorization":"Bearer "+sy.token,"Accept":"application/vnd.github+json","Content-Type":"application/json"},
@@ -1008,6 +1032,7 @@ async function pushSync(manual){
     return true;
   }catch(e){sy.err=String(e.message||e);try{localStorage.setItem(KEY,JSON.stringify(S))}catch(x){}if(manual)toast(sy.err==="401"?"Der Token stimmt nicht.":"Sync fehlgeschlagen. Bist du online?");return false}
 }
+const calUrl=()=>S.sync&&S.sync.gistId&&S.sync.owner?`webcal://gist.githubusercontent.com/${S.sync.owner}/${S.sync.gistId}/raw/lifeplanner.ics`:"";
 const widgetUrl=()=>S.sync&&S.sync.gistId&&S.sync.owner?`https://gist.githubusercontent.com/${S.sync.owner}/${S.sync.gistId}/raw/lifeplanner-widget.json`:"";
 setInterval(()=>{if(S.sync&&S.sync.token&&!inFrame&&document.visibilityState==="visible")pushSync()},15*60000);
 setInterval(tick,1000);setInterval(checkTimers,10000);
@@ -1070,6 +1095,7 @@ const A={
   widgets:widgetSheet,
   quick:quickSheet, quickTrain:trainPickSheet,
   syncOn:async()=>{const v=document.getElementById("syncToken").value.trim();if(!v){toast("Bitte Token einfügen.");return}S.sync={token:v};const ok=await pushSync(true);if(!ok){S.sync=null}save();profileSheet()},
+  copyCUrl:()=>{const u=calUrl();try{navigator.clipboard.writeText(u).then(()=>toast("Adresse kopiert"),()=>toast(u))}catch(e){toast(u)}},
   syncNow:async()=>{await pushSync(true);profileSheet()},
   syncOff:()=>{S.sync=null;save();profileSheet();toast("Widget-Sync getrennt")},
   copyWUrl:()=>{const u=widgetUrl();try{navigator.clipboard.writeText(u).then(()=>toast("Adresse kopiert"),()=>{document.getElementById("wUrl").select();toast("Text markiert: jetzt kopieren")})}catch(e){document.getElementById("wUrl").select()}},
